@@ -23,6 +23,24 @@
 # Default: http://localhost:11434
 #OLLAMA_URL=http://localhost:11434
 
+# ─── Summarization provider ───────────────────────────────────────────
+# Provider for the summarization step. Options: ollama (default), openai
+# Use 'openai' for LM Studio or any OpenAI-compatible API.
+#SUMMARIZE_PROVIDER=ollama
+
+# ─── OpenAI-compatible API settings (used when SUMMARIZE_PROVIDER=openai) ──
+# Base URL for the OpenAI-compatible API (no trailing slash, no /v1 suffix)
+# Example for LM Studio on gaming PC at 192.168.1.50:
+#OPENAI_BASE_URL=http://192.168.1.50:1234
+
+# Model name to request. LM Studio accepts any string when only one model is loaded;
+# set to the exact model path if multiple models are loaded.
+#OPENAI_MODEL=local-model
+
+# API key. Leave unset or empty for LM Studio (no auth by default).
+# Set if your LM Studio instance or other provider requires authentication.
+#OPENAI_API_KEY=
+
 # Audio recording backend: ffmpeg or pw-record
 # Use pw-record for Bluetooth headsets (HSP/HFP mode via PipeWire).
 # Default: ffmpeg

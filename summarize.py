@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 """
-Meeting summarization script using Ollama
-Takes transcription text and generates meeting notes, summaries, and action items
+Meeting summarization script — supports Ollama and OpenAI-compatible APIs (LM Studio)
+Takes transcription text and generates meeting notes, summaries, and action items.
 """
 
 import argparse
@@ -19,6 +19,7 @@ except ImportError:
 
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OPENAI_URL = "http://localhost:1234"
 
 SUMMARY_PROMPT = """You are an assistant that writes concise meeting notes from transcripts.
 
@@ -45,9 +46,20 @@ Transcription:
 Use markdown headings and bullet points. Do not wrap your response in a code block."""
 
 
+def _build_prompt(transcription: str) -> str:
+    """
+    Safely substitute transcription into the prompt template.
+
+    Uses simple string replacement instead of str.format() to avoid
+    KeyError/IndexError if the transcript contains curly braces
+    (e.g. {variable}, {TICKET-123}, ${HOME}).
+    """
+    return SUMMARY_PROMPT.replace("{transcription}", transcription)
+
+
 def query_ollama(prompt: str, model: str = "llama3.1:8b", ollama_url: str = DEFAULT_OLLAMA_URL) -> str:
     """
-    Query Ollama API for text generation
+    Query Ollama API for text generation.
 
     Args:
         prompt: The prompt to send
@@ -70,7 +82,50 @@ def query_ollama(prompt: str, model: str = "llama3.1:8b", ollama_url: str = DEFA
         response.raise_for_status()
         return response.json()["response"]
     except requests.exceptions.RequestException as e:
-        print(f"Error querying Ollama: {e}", file=sys.stderr)
+        print(f"Error querying Ollama at {ollama_url}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def query_openai(prompt: str, model: str, base_url: str, api_key: str = "") -> str:
+    """
+    Query OpenAI-compatible API (/v1/chat/completions) — works with LM Studio.
+
+    Args:
+        prompt: The prompt to send
+        model: Model name to request
+        base_url: Base URL of the API (no trailing slash, no /v1)
+        api_key: Optional API key (empty for LM Studio default)
+
+    Returns:
+        Generated text response
+    """
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        response = requests.post(
+            f"{base_url}/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+            },
+            timeout=300,
+        )
+        response.raise_for_status()
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            print(
+                f"Error: API returned empty choices. Response: {response.text[:500]}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return choices[0]["message"]["content"]
+    except requests.exceptions.RequestException as e:
+        print(f"Error querying OpenAI-compatible API at {base_url}: {e}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -92,16 +147,20 @@ def load_transcription(file_path: str) -> str:
 def summarize_meeting(
     transcription: str,
     model: str,
-    ollama_url: str,
+    provider: str = "ollama",
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+    openai_url: str = DEFAULT_OPENAI_URL,
+    openai_api_key: str = "",
 ) -> dict:
-    """Generate meeting notes from a transcription in a single Ollama call."""
-    print(f"Generating meeting summary using {model}...", file=sys.stderr)
+    """Generate meeting notes from a transcription using the configured provider."""
+    print(f"Generating meeting summary using {provider}/{model}...", file=sys.stderr)
 
-    text = query_ollama(
-        SUMMARY_PROMPT.format(transcription=transcription),
-        model=model,
-        ollama_url=ollama_url,
-    )
+    prompt = _build_prompt(transcription)
+
+    if provider == "openai":
+        text = query_openai(prompt, model, openai_url, openai_api_key)
+    else:
+        text = query_ollama(prompt, model, ollama_url)
 
     return {"summary": _strip_code_fence(text)}
 
@@ -129,18 +188,25 @@ def save_summary(result: dict, output_file: str, format: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Summarize meeting transcription using Ollama")
+    parser = argparse.ArgumentParser(
+        description="Summarize meeting transcription using Ollama or OpenAI-compatible API"
+    )
     parser.add_argument("transcription_file", help="Path to transcription file (.txt or .json)")
     parser.add_argument("-m", "--model", default="llama3.1:8b",
-                       help="Ollama model to use (default: llama3.1:8b)")
+                        help="Model name (default: llama3.1:8b)")
+    parser.add_argument("--provider", default="ollama", choices=["ollama", "openai"],
+                        help="API provider: ollama (default) or openai (LM Studio)")
     parser.add_argument("-u", "--ollama-url", default=DEFAULT_OLLAMA_URL,
-                       help=f"Ollama API URL (default: {DEFAULT_OLLAMA_URL})")
+                        help=f"Ollama API URL (default: {DEFAULT_OLLAMA_URL})")
+    parser.add_argument("--base-url", default=DEFAULT_OPENAI_URL,
+                        help=f"OpenAI-compatible base URL (default: {DEFAULT_OPENAI_URL})")
+    parser.add_argument("--api-key", default="",
+                        help="API key for OpenAI-compatible provider (default: none)")
     parser.add_argument("-f", "--format", default="md",
-                       choices=["txt", "md", "json"],
-                       help="Output format (default: md)")
+                        choices=["txt", "md", "json"],
+                        help="Output format (default: md)")
     parser.add_argument("-o", "--output",
-                       help="Output file (default: transcription_file_summary.md)")
-
+                        help="Output file (default: transcription_file_summary.md)")
 
     args = parser.parse_args()
 
@@ -164,7 +230,10 @@ def main():
         result = summarize_meeting(
             transcription,
             model=args.model,
+            provider=args.provider,
             ollama_url=args.ollama_url,
+            openai_url=args.base_url,
+            openai_api_key=args.api_key,
         )
 
         # Save results

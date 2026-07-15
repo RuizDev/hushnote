@@ -21,6 +21,10 @@ WHISPER_MODEL="${WHISPER_MODEL:-base}"
 WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+SUMMARIZE_PROVIDER="${SUMMARIZE_PROVIDER:-ollama}"
+OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://localhost:1234}"
+OPENAI_MODEL="${OPENAI_MODEL:-local-model}"
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 PROCESS_TIMEOUT="${PROCESS_TIMEOUT:-7200}"  # Max seconds for process/process-last (default: 2h)
 TRIM_NOISE_DB="${TRIM_NOISE_DB:--35}"       # dB threshold for silence detection (default: -35)
 TRIM_MIN_SILENCE="${TRIM_MIN_SILENCE:-60}"  # Minimum silence duration in seconds (default: 60)
@@ -304,7 +308,6 @@ summarize_meeting() {
     fi
 
     log_info "Summarizing transcription: $transcription_file"
-    log_info "Using Ollama model: $model"
 
     # Derive output path, stripping _trimmed suffix so summaries are named
     # after the meeting base rather than the trimmed file.
@@ -314,9 +317,30 @@ summarize_meeting() {
         output="${base}_summary.${format}"
     fi
 
-    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/summarize.py\" \"$transcription_file\" -m $model -f $format -o \"$output\""
+    # Build command arguments using array (safe for paths with spaces — fixes BUG-3)
+    local cmd_args=("$PYTHON" "${SCRIPT_DIR}/summarize.py" "$transcription_file"
+        -m "$model"
+        -f "$format"
+        -o "$output"
+        --provider "$SUMMARIZE_PROVIDER"
+    )
 
-    eval $cmd
+    # Forward Ollama URL if set (fixes BUG-1 — was silently ignored)
+    [ -n "$OLLAMA_URL" ] && cmd_args+=(-u "$OLLAMA_URL")
+
+    # Forward OpenAI-specific settings when using the openai provider
+    if [ "$SUMMARIZE_PROVIDER" = "openai" ]; then
+        cmd_args+=(--base-url "$OPENAI_BASE_URL")
+        # Override model with the OpenAI-specific model name
+        cmd_args+=(-m "$OPENAI_MODEL")
+        [ -n "$OPENAI_API_KEY" ] && cmd_args+=(--api-key "$OPENAI_API_KEY")
+        log_info "Using OpenAI-compatible provider: $OPENAI_BASE_URL / $OPENAI_MODEL"
+    else
+        log_info "Using Ollama provider: $OLLAMA_URL / $model"
+    fi
+
+    log_debug "Running: ${cmd_args[*]}"
+    "${cmd_args[@]}"
 
     if [ -f "$output" ]; then
         log_success "Summary complete: $output"
